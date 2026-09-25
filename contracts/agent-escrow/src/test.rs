@@ -448,7 +448,7 @@ fn test_admin_release_to_agent_on_pending_escrow() {
     let amount = 1_000_0000000i128;
     let (_, _, agent, id) = make_escrow(&env, &client, &usdc_id, &admin, amount, 250);
 
-    client.admin_release(&id, &true);
+    client.admin_release(&id, &true, &Symbol::new(&env, "DisputeResolved"));
 
     let escrow = client.get_escrow(&id);
     assert_eq!(escrow.status, EscrowStatus::Completed);
@@ -464,7 +464,7 @@ fn test_admin_release_refunds_sender_on_pending_escrow() {
     let amount = 1_000_0000000i128;
     let (sender, _, _, id) = make_escrow(&env, &client, &usdc_id, &admin, amount, 250);
 
-    client.admin_release(&id, &false);
+    client.admin_release(&id, &false, &Symbol::new(&env, "AgentUnresponsive"));
 
     let escrow = client.get_escrow(&id);
     assert_eq!(escrow.status, EscrowStatus::Cancelled);
@@ -477,7 +477,7 @@ fn test_admin_release_on_completed_escrow_panics() {
     let (env, client, admin, usdc_id) = setup();
     let (_, _, agent, id) = make_escrow(&env, &client, &usdc_id, &admin, 1_000_0000000, 250);
     client.confirm_payout(&agent, &id);
-    client.admin_release(&id, &true);
+    client.admin_release(&id, &true, &Symbol::new(&env, "DisputeResolved"));
 }
 
 #[test]
@@ -487,7 +487,35 @@ fn test_admin_release_on_cancelled_escrow_panics() {
     let (sender, _, _, id) = make_escrow(&env, &client, &usdc_id, &admin, 1_000_0000000, 250);
     env.ledger().with_mut(|li| li.timestamp += 48 * 60 * 60 + 1);
     client.cancel_escrow(&sender, &id);
-    client.admin_release(&id, &false);
+    client.admin_release(&id, &false, &Symbol::new(&env, "FraudConfirmed"));
+}
+
+#[test]
+fn test_admin_release_includes_reason_in_event() {
+    let (env, client, admin, usdc_id) = setup();
+    let amount = 1_000_0000000i128;
+    let (_, _, agent, id) = make_escrow(&env, &client, &usdc_id, &admin, amount, 250);
+
+    let reason = Symbol::new(&env, "FraudConfirmed");
+    client.admin_release(&id, &true, &reason);
+
+    // Verify reason is included in the AdminOverride event
+    let contract_topic: Val = Symbol::new(&env, "AgentEscrow").into_val(&env);
+    let event_topic: Val = Symbol::new(&env, "AdminOverride").into_val(&env);
+    let events = env.events().all();
+    let ao_event = events.iter().find(|(_, topics, _)| {
+        topics.len() == 2
+            && topics.get(0).map(|t| t == &contract_topic).unwrap_or(false)
+            && topics.get(1).map(|t| t == &event_topic).unwrap_or(false)
+    });
+    assert!(ao_event.is_some(), "AdminOverride event not emitted");
+    let (_, _, data) = ao_event.unwrap();
+    let payload: AdminOverride = soroban_sdk::from_val(&env, data);
+    assert_eq!(payload.escrow_id, id);
+    assert_eq!(payload.admin, admin);
+    assert_eq!(payload.to_agent, true);
+    assert_eq!(payload.amount, amount);
+    assert_eq!(payload.reason, reason);
 }
 
 #[test]
@@ -496,7 +524,7 @@ fn test_admin_release_emits_admin_override_event() {
     let amount = 1_000_0000000i128;
     let (_, _, agent, id) = make_escrow(&env, &client, &usdc_id, &admin, amount, 250);
 
-    client.admin_release(&id, &true);
+    client.admin_release(&id, &true, &Symbol::new(&env, "DisputeResolved"));
 
     // Two-element topic: ("AgentEscrow", "AdminOverride")
     let contract_topic: Val = Symbol::new(&env, "AgentEscrow").into_val(&env);

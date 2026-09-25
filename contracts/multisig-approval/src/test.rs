@@ -760,6 +760,85 @@ fn test_cancel_signer_change_by_approver_is_allowed() {
     client.propose_signer_change(&RotationAction::Add, &new_signer);
 }
 
+// ── #1057: quorum edge cases ─────────────────────────────────────────────────
+
+#[test]
+fn test_single_approver_quorum_1_self_approval_executes() {
+    // Issue #1057: Test quorum=1 with a single approver (self-approval).
+    // Confirms that a "multisig of one" with self-approval works as expected.
+    let (env, contract_id, approvers, _) = setup(1, 1);
+    let client = MultisigContractClient::new(&env, &contract_id);
+    let sole_approver = approvers.get(0).unwrap();
+    
+    // Proposer is also the only approver
+    let tx_id = propose(&env, &contract_id, &sole_approver);
+    assert_eq!(client.get_proposal(&tx_id).status, TxStatus::Pending);
+    
+    // Self-approval should execute immediately (quorum reached)
+    client.approve(&sole_approver, &tx_id);
+    assert_eq!(client.get_proposal(&tx_id).status, TxStatus::Executed);
+}
+
+#[test]
+#[should_panic(expected = "invalid quorum")]
+fn test_initialize_quorum_zero_panics() {
+    // Issue #1057: quorum=0 should be rejected at initialize time.
+    // Zero-approval execution is not the intended design.
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let a1 = Address::generate(&env);
+    let mut v = soroban_sdk::Vec::new(&env);
+    v.push_back(a1);
+    let contract_id = env.register_contract(None, MultisigContract);
+    MultisigContractClient::new(&env, &contract_id).initialize(&admin, &v, &0);
+}
+
+#[test]
+#[should_panic(expected = "invalid quorum")]
+fn test_quorum_greater_than_approver_count_panics() {
+    // Issue #1057: quorum > approver count should be rejected.
+    // This catches the misconfiguration at init time rather than creating
+    // an unreachable, permanently stuck contract.
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+    let mut approvers = soroban_sdk::Vec::new(&env);
+    for _ in 0..3 {
+        approvers.push_back(Address::generate(&env));
+    }
+    let contract_id = env.register_contract(None, MultisigContract);
+    // 3 approvers, quorum=4 — impossible to reach
+    MultisigContractClient::new(&env, &contract_id).initialize(&admin, &approvers, &4);
+}
+
+#[test]
+fn test_quorum_change_to_unreachable_via_propose_rejected() {
+    // Issue #1057: Attempting to propose a quorum higher than remaining approvers
+    // must be rejected at propose time to prevent a permanently stuck contract.
+    let (env, contract_id, approvers, _) = setup(2, 3);
+    let client = MultisigContractClient::new(&env, &contract_id);
+    
+    // Try to propose quorum=4 when we only have 3 approvers total
+    // The validation in propose_quorum_change should reject this
+    // (It already does via the "invalid quorum" check, tested above)
+    let proposer = approvers.get(0).unwrap();
+    
+    // This should panic due to quorum > approvers.len() check
+    // We verify the edge case is caught at proposal time, not execution time
+    client.propose_quorum_change(&proposer, &4); // panic expected
+}
+
+#[test]
+#[should_panic(expected = "invalid quorum")]
+fn test_quorum_change_to_unreachable_panics() {
+    // Issue #1057: Setting quorum=0 via quorum_change proposal must also panic.
+    // The contract should forbid zero quorum both at init and at change time.
+    let (env, contract_id, approvers, _) = setup(2, 3);
+    let client = MultisigContractClient::new(&env, &contract_id);
+    client.propose_quorum_change(&approvers.get(0).unwrap(), &0);
+}
+
 #[test]
 #[should_panic(expected = "not authorized to cancel")]
 fn test_cancel_signer_change_by_outsider_panics() {

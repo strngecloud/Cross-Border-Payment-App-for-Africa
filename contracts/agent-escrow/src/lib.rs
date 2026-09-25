@@ -111,6 +111,7 @@ pub struct AdminOverride {
     pub admin: Address,
     pub to_agent: bool,
     pub amount: i128,
+    pub reason: Symbol,
 }
 
 #[derive(Clone)]
@@ -623,10 +624,18 @@ impl AgentEscrowContract {
     /// If `to_agent` is true, transfers the full amount (minus platform fee) to the agent.
     /// If `to_agent` is false, refunds the full amount to the sender.
     ///
+    /// The `reason` parameter must be one of the accepted reason codes:
+    /// - "DisputeResolved": Dispute between sender and agent has been resolved in favor of the receiver
+    /// - "AgentUnresponsive": Agent failed to respond or deliver within expected timeframe
+    /// - "FraudConfirmed": Agent fraud or non-delivery has been confirmed
+    /// - "SenderRequest": Sender requested early release or refund
+    /// - "SystemError": Contract or system error necessitated manual intervention
+    ///
     /// # Arguments
     /// * `escrow_id` — ID of the escrow to override.
     /// * `to_agent`  — true to release to agent, false to refund sender.
-    pub fn admin_release(env: Env, escrow_id: u64, to_agent: bool) {
+    /// * `reason`    — Symbol code documenting why the override occurred.
+    pub fn admin_release(env: Env, escrow_id: u64, to_agent: bool, reason: Symbol) {
         let admin: Address = env
             .storage()
             .persistent()
@@ -706,6 +715,7 @@ impl AgentEscrowContract {
                 admin,
                 to_agent,
                 amount: escrow.amount,
+                reason,
             },
         );
     }

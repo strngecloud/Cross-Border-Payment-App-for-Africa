@@ -601,7 +601,7 @@ impl SavingsVaultContract {
             .get(&DataKey::Vault(user.clone()))
             .expect("No vault found for user");
 
-        let interest = Self::accrue_interest_internal(&env, &mut vault);
+        let interest = Self::accrue_interest_internal(&env, &mut vault, true);
         env.storage()
             .persistent()
             .set(&DataKey::Vault(user.clone()), &vault);

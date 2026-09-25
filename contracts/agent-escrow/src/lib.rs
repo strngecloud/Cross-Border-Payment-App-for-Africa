@@ -161,12 +161,14 @@ pub struct AgentEscrowContract;
 #[contractimpl]
 impl AgentEscrowContract {
     /// Initialise the contract. Must be called once before any other function.
+    /// The caller must be authorised as the admin.
     ///
     /// # Arguments
     /// * `admin`                  — Address that may withdraw accumulated fees.
     /// * `usdc_address`           — Stellar asset contract address for USDC.
     /// * `cancel_window_seconds`  — Seconds after escrow creation before the sender may cancel.
     pub fn initialize(env: Env, admin: Address, usdc_address: Address, cancel_window_seconds: u64) {
+        admin.require_auth();
         if env.storage().persistent().has(&DataKey::Admin) {
             panic!("already initialized");
         }
@@ -331,9 +333,16 @@ impl AgentEscrowContract {
         id
     }
 
+    /// Helper to calculate the remaining escrow amount (not yet released).
+    ///
+    /// Returns: amount - released_amount
+    fn remaining(escrow: &AgentEscrow) -> i128 {
+        escrow.amount - escrow.released_amount
+    }
+
     /// Agent confirms off-chain fiat delivery, releasing USDC from escrow.
     ///
-    /// Transfers `(amount - fee)` to the agent and accumulates the fee.
+    /// Transfers `(remaining - fee)` to the agent and accumulates the fee.
     /// A portion of the fee is contributed to the insurance fund.
     /// Only the designated agent may call this function.
     ///
@@ -356,8 +365,9 @@ impl AgentEscrowContract {
             panic!("escrow is not pending");
         }
 
-        let fee_amount = (escrow.amount * escrow.fee_bps as i128) / 10_000;
-        let agent_amount = escrow.amount - fee_amount;
+        let remaining_amount = Self::remaining(&escrow);
+        let fee_amount = (remaining_amount * escrow.fee_bps as i128) / 10_000;
+        let agent_amount = remaining_amount - fee_amount;
 
         let usdc: Address = env
             .storage()
@@ -503,6 +513,7 @@ impl AgentEscrowContract {
     ///
     /// Only the original sender may cancel, and only after the 48-hour
     /// cancellation window has elapsed without agent confirmation.
+    /// Refunds the remaining balance (accounting for any prior partial releases).
     ///
     /// # Arguments
     /// * `sender`    — Must match the sender recorded in the escrow.
@@ -526,6 +537,8 @@ impl AgentEscrowContract {
             panic!("cancellation window has not elapsed");
         }
 
+        let remaining_amount = Self::remaining(&escrow);
+
         let usdc: Address = env
             .storage()
             .persistent()
@@ -535,7 +548,7 @@ impl AgentEscrowContract {
         token::Client::new(&env, &usdc).transfer(
             &env.current_contract_address(),
             &escrow.sender,
-            &escrow.amount,
+            &remaining_amount,
         );
 
         escrow.status = EscrowStatus::Cancelled;
@@ -543,7 +556,7 @@ impl AgentEscrowContract {
 
         env.events().publish(
             (Symbol::new(&env, "AgentEscrow"), Symbol::new(&env, "EscrowCancelled")),
-            EvtEscrowCancelled { escrow_id, sender: escrow.sender.clone(), refund_amount: escrow.amount },
+            EvtEscrowCancelled { escrow_id, sender: escrow.sender.clone(), refund_amount: remaining_amount },
         );
     }
 
@@ -620,8 +633,9 @@ impl AgentEscrowContract {
 
     /// Admin override to release or refund a pending escrow before timeout.
     ///
-    /// If `to_agent` is true, transfers the full amount (minus platform fee) to the agent.
-    /// If `to_agent` is false, refunds the full amount to the sender.
+    /// If `to_agent` is true, transfers the remaining amount (minus platform fee) to the agent.
+    /// If `to_agent` is false, refunds the remaining amount to the sender.
+    /// Accounts for any prior partial releases.
     ///
     /// # Arguments
     /// * `escrow_id` — ID of the escrow to override.
@@ -644,8 +658,9 @@ impl AgentEscrowContract {
             panic!("escrow is not pending");
         }
 
-        let fee_amount = (escrow.amount * escrow.fee_bps as i128) / 10_000;
-        let net_amount = escrow.amount - fee_amount;
+        let remaining_amount = Self::remaining(&escrow);
+        let fee_amount = (remaining_amount * escrow.fee_bps as i128) / 10_000;
+        let net_amount = remaining_amount - fee_amount;
 
         let usdc: Address = env
             .storage()
@@ -683,7 +698,7 @@ impl AgentEscrowContract {
             token::Client::new(&env, &usdc).transfer(
                 &env.current_contract_address(),
                 &escrow.sender,
-                &escrow.amount,
+                &remaining_amount,
             );
             escrow.status = EscrowStatus::Cancelled;
 
@@ -692,7 +707,7 @@ impl AgentEscrowContract {
                 EvtEscrowCancelled {
                     escrow_id,
                     sender: escrow.sender.clone(),
-                    refund_amount: escrow.amount,
+                    refund_amount: remaining_amount,
                 },
             );
         }
@@ -705,7 +720,7 @@ impl AgentEscrowContract {
                 escrow_id,
                 admin,
                 to_agent,
-                amount: escrow.amount,
+                amount: remaining_amount,
             },
         );
     }
@@ -804,7 +819,7 @@ impl AgentEscrowContract {
     ///
     /// # Arguments
     /// * `new_bps` — New contribution rate in basis points (max 1000 = 10%).
-    pub fn update_insurance_contribution_bps(env: Env, new_bps: u32) {
+    pub fn set_insurance_contribution_bps(env: Env, new_bps: u32) {
         let admin: Address = env
             .storage()
             .persistent()

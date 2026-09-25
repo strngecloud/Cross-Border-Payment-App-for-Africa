@@ -29,7 +29,8 @@
 //! `transfer`, `transfer_from`.
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec,
+    contract, contractimpl, contracttype, symbol_short, Address, Env, IntoVal, String, Symbol,
+    Vec,
 };
 
 #[contracttype]
@@ -805,7 +806,7 @@ impl LoyaltyTokenContract {
             let kyc_client = env.invoke_contract::<bool>(
                 &kyc_addr,
                 &Symbol::new(env, "is_verified"),
-                soroban_sdk::vec![env, from.clone().into_val(env)].into(),
+                soroban_sdk::vec![env, from.clone().into_val(env)],
             );
 
             if !kyc_client {
@@ -815,7 +816,7 @@ impl LoyaltyTokenContract {
             let kyc_client_to = env.invoke_contract::<bool>(
                 &kyc_addr,
                 &Symbol::new(env, "is_verified"),
-                soroban_sdk::vec![env, to.clone().into_val(env)].into(),
+                soroban_sdk::vec![env, to.clone().into_val(env)],
             );
 
             if !kyc_client_to {
